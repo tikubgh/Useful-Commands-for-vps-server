@@ -7,4 +7,5 @@ Useful Commands for vps server
 - du -hx --max-depth=2 /home /opt /usr/local 2>/dev/null | sort -rh | head -n 15
 - du -hx --max-depth=2 /var /usr 2>/dev/null | sort -rh | head -n 15
 
-- After cleanup check space:df -h /
+-- After cleanup check space:
+- df -h /
