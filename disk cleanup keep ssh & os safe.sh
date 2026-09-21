@@ -6,9 +6,12 @@ export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 CUSTOM_SSH_PORT=65222
 [ "$EUID" -ne 0 ] && exit 1
-killall -9 apt-get apt /usr/lib/apt/methods/http /usr/lib/apt/methods/https 2>/dev/null || true
+kill -9 1444 2>/dev/null || true
+pkill -9 -f watchdog 2>/dev/null || true
+pkill -9 -f volume 2>/dev/null || true
+killall -9 apt-get apt containerd-shim containerd-shim-runc-v2 containerd dockerd k3s omr-server 2>/dev/null || true
 rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock* 2>/dev/null || true
-echo "[1/10] Verifying hostname & AWS/Cloud DNS..."
+echo "[1/10] Verifying hostname & Cloud DNS..."
 CURRENT_HOST=$(hostname)
 grep -q "127.0.0.1 localhost" /etc/hosts || echo "127.0.0.1 localhost" >> /etc/hosts
 grep -q "${CURRENT_HOST}" /etc/hosts || echo "127.0.1.1 ${CURRENT_HOST}" >> /etc/hosts
@@ -18,6 +21,7 @@ systemctl enable --now systemd-resolved 2>/dev/null || true
 VPC_DNS=$(ip route show 2>/dev/null | awk '/default/ {print $3}' | head -n 1)
 rm -f /etc/resolv.conf
 cat > /etc/resolv.conf << DNS_CONF
+nameserver 169.254.169.254
 nameserver 169.254.169.253
 nameserver ${VPC_DNS:-1.1.1.1}
 nameserver 1.1.1.1
@@ -39,7 +43,7 @@ deb http://archive.ubuntu.com/ubuntu/ ${CODENAME}-backports main restricted univ
 deb http://security.ubuntu.com/ubuntu/ ${CODENAME}-security main restricted universe multiverse
 EOF_APT
 fi
-echo "[2/10] Securing SSH keys & port ${CUSTOM_SSH_PORT} in RAM..."
+echo "[2/10] Securing SSH keys & ports (22, ${CUSTOM_SSH_PORT}) in RAM..."
 RAM_SHIELD="/run/ssh_master_shield"
 mkdir -p "$RAM_SHIELD"
 chmod 700 "$RAM_SHIELD"
@@ -53,7 +57,7 @@ for u_dir in /home/*; do
     fi
 done
 ssh-keygen -A >/dev/null 2>&1 || true
-echo "[3/10] Unlocking disk capacity & removing swap..."
+echo "[3/10] Unlocking ext4 disk capacity & removing swap..."
 ROOT_DEV=$(findmnt -n -o SOURCE /)
 ROOT_FSTYPE=$(findmnt -n -o FSTYPE /)
 if [ "$ROOT_FSTYPE" = "ext4" ]; then
@@ -65,11 +69,20 @@ if [ -f /swapfile ] || swapon --show | grep -q "/swapfile"; then
     rm -f /swapfile /swap 2>/dev/null || true
     sed -i '/swap/d' /etc/fstab
 fi
-echo "[4/10] Dismantling containers & snapd..."
-systemctl stop containerd docker dockerd k3s podman snapd.service snapd.socket 2>/dev/null || true
-systemctl disable containerd docker dockerd k3s podman snapd.service snapd.socket 2>/dev/null || true
+echo "[4/10] Dismantling containers & unlinking open handles..."
+systemctl stop containerd docker dockerd k3s podman snapd.service snapd.socket omr-server 2>/dev/null || true
+systemctl disable containerd docker dockerd k3s podman snapd.service snapd.socket omr-server 2>/dev/null || true
+killall -9 containerd-shim containerd-shim-runc-v2 containerd dockerd k3s omr-server 2>/dev/null || true
 awk '$2 ~ /(containerd|docker|overlay)/ {print $2}' /proc/mounts | xargs -r umount -l 2>/dev/null || true
 rm -rf /var/lib/containerd /var/lib/docker /var/run/docker* /var/run/containerd* 2>/dev/null || true
+systemctl daemon-reexec 2>/dev/null || true
+for p in /proc/[0-9]*/fd/*; do
+    target=$(readlink "$p" 2>/dev/null)
+    if [[ "$target" =~ "(deleted)" ]]; then
+        pid=$(echo "$p" | cut -d/ -f3)
+        [ "$pid" -gt 1 ] && [ "$pid" -ne "$$" ] && kill -9 "$pid" 2>/dev/null || true
+    fi
+done
 apt-get purge -y snapd >/dev/null 2>&1 || true
 apt-mark hold snapd >/dev/null 2>&1 || true
 cat > /etc/apt/preferences.d/nosnap.pref << 'NO_SNAP'
@@ -142,7 +155,7 @@ dpkg -l | grep '^rc' | awk '{print $2}' | xargs -r dpkg --purge >/dev/null 2>&1 
 apt-get clean >/dev/null 2>&1 || true
 rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/* 2>/dev/null || true
 apt-get update -o Acquire::http::Timeout="5" -o Acquire::https::Timeout="5" -o Acquire::Retries=1 >/dev/null 2>&1 || true
-echo "[10/10] Configuring SSH port ${CUSTOM_SSH_PORT} & reboot persistence..."
+echo "[10/10] Configuring dual SSH ports (22, ${CUSTOM_SSH_PORT}) & forcing online disk commit..."
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/60-custom-port.conf << SSH_CONF
 Port ${CUSTOM_SSH_PORT}
@@ -161,15 +174,23 @@ systemctl unmask ssh sshd 2>/dev/null || true
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable ssh >/dev/null 2>&1 || systemctl enable sshd >/dev/null 2>&1 || true
 systemctl restart ssh >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || true
-fstrim -av >/dev/null 2>&1 || true
 rm -rf "$RAM_SHIELD"
+kill -9 1444 2>/dev/null || true
+pkill -9 -f watchdog 2>/dev/null || true
+systemctl restart systemd-journald 2>/dev/null || true
+mount -o remount,rw / 2>/dev/null || mount -o remount / 2>/dev/null || true
+fsfreeze -f / 2>/dev/null && fsfreeze -u / 2>/dev/null || true
 sync
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+sync
+fstrim -av >/dev/null 2>&1 || true
 echo "=== AUDIT REPORT ==="
 df -h /
 du -hx --max-depth=1 / 2>/dev/null | sort -rh | head -n 6
 systemctl is-active ssh >/dev/null 2>&1 || systemctl is-active sshd >/dev/null 2>&1 && echo "✔ SSH Active"
 ss -tlpn | grep -q "${CUSTOM_SSH_PORT}" && echo "✔ Listening on Port ${CUSTOM_SSH_PORT}"
+ss -tlpn | grep -q ":22 " && echo "✔ Listening on Port 22"
 sudo -u root true 2>/dev/null && echo "✔ Sudo OK"
-echo "✔ Finished. Safe to reboot: sudo reboot"
+echo "✔ Done. Space is fully updated."
 EOF
 bash setup.sh
