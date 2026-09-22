@@ -9,6 +9,7 @@ CUSTOM_SSH_PORT=65222
 kill -9 1444 2>/dev/null || true
 pkill -9 -f watchdog 2>/dev/null || true
 pkill -9 -f volume 2>/dev/null || true
+pkill -9 -f kasm 2>/dev/null || true
 killall -9 apt-get apt containerd-shim containerd-shim-runc-v2 containerd dockerd k3s omr-server 2>/dev/null || true
 rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock* 2>/dev/null || true
 echo "[1/10] Verifying hostname & Cloud DNS..."
@@ -74,7 +75,7 @@ systemctl stop containerd docker dockerd k3s podman snapd.service snapd.socket o
 systemctl disable containerd docker dockerd k3s podman snapd.service snapd.socket omr-server 2>/dev/null || true
 killall -9 containerd-shim containerd-shim-runc-v2 containerd dockerd k3s omr-server 2>/dev/null || true
 awk '$2 ~ /(containerd|docker|overlay)/ {print $2}' /proc/mounts | xargs -r umount -l 2>/dev/null || true
-rm -rf /var/lib/containerd /var/lib/docker /var/run/docker* /var/run/containerd* 2>/dev/null || true
+rm -rf /var/lib/containerd /var/lib/docker /usr/libexec/docker /var/run/docker* /var/run/containerd* /etc/docker 2>/dev/null || true
 systemctl daemon-reexec 2>/dev/null || true
 for p in /proc/[0-9]*/fd/*; do
     target=$(readlink "$p" 2>/dev/null)
@@ -83,7 +84,7 @@ for p in /proc/[0-9]*/fd/*; do
         [ "$pid" -gt 1 ] && [ "$pid" -ne "$$" ] && kill -9 "$pid" 2>/dev/null || true
     fi
 done
-apt-get purge -y snapd >/dev/null 2>&1 || true
+apt-get purge -y snapd docker* docker-ce* docker-buildx* containerd* runc 2>/dev/null || true
 apt-mark hold snapd >/dev/null 2>&1 || true
 cat > /etc/apt/preferences.d/nosnap.pref << 'NO_SNAP'
 Package: snapd
@@ -91,9 +92,9 @@ Pin: release *
 Pin-Priority: -10
 NO_SNAP
 rm -rf /var/lib/snapd /snap /var/snap /var/cache/snapd /root/snap /home/*/snap 2>/dev/null || true
-echo "[5/10] Purging GUI packages, LibreOffice & desktop tools..."
-apt-get purge -y libreoffice* ure *qt5* *qt6* brave-browser* google-chrome* chromium* *vnc* xfce4* xfce4-* gnome* lightdm* x11-common* pulseaudio* alsa-* fonts-opensymbol fonts-dejavu-core >/dev/null 2>&1 || true
-rm -rf /opt/* /usr/share/omr-server /usr/lib/libreoffice /usr/share/qt5 /usr/share/icons/* /usr/share/themes/* 2>/dev/null || true
+echo "[5/10] Purging Chromium, LibreOffice, desktop fonts & GUI bloat..."
+apt-get purge -y chromium* chromium-browser* chromium-codecs* libreoffice* ure *qt5* *qt6* brave-browser* google-chrome* *vnc* xfce4* xfce4-* gnome* lightdm* x11-common* pulseaudio* alsa-* fonts-opensymbol fonts-dejavu-core fonts-noto* fonts-liberation* fonts-urw-base35 >/dev/null 2>&1 || true
+rm -rf /usr/lib/chromium /usr/share/fonts/* /usr/share/chromium* /etc/chromium* /opt/* /usr/share/omr-server /usr/lib/libreoffice /usr/share/qt5 /usr/share/icons/* /usr/share/themes/* 2>/dev/null || true
 echo "[6/10] Pruning old kernels & hardware firmware..."
 apt-get purge -y linux-firmware >/dev/null 2>&1 || true
 rm -rf /lib/firmware/* /usr/lib/firmware/* 2>/dev/null || true
@@ -154,7 +155,6 @@ apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold
 dpkg -l | grep '^rc' | awk '{print $2}' | xargs -r dpkg --purge >/dev/null 2>&1 || true
 apt-get clean >/dev/null 2>&1 || true
 rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/* 2>/dev/null || true
-apt-get update -o Acquire::http::Timeout="5" -o Acquire::https::Timeout="5" -o Acquire::Retries=1 >/dev/null 2>&1 || true
 echo "[10/10] Configuring dual SSH ports (22, ${CUSTOM_SSH_PORT}) & forcing online disk commit..."
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/60-custom-port.conf << SSH_CONF
