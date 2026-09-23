@@ -10,6 +10,6 @@ Useful Commands for vps server
 -- After cleanup check space:
 - df -h /
 
--- htop installaer:
+-- htop installer:
 - apt update && apt install -y htop
 ----------------------------------------------------------
